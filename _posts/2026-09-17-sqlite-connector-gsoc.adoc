@@ -1,0 +1,80 @@
+---
+layout: post
+title:  "Change Data Capture for SQLite: My Google Summer of Code Journey with Debezium"
+date:   2026-09-17
+author: siddhantcvdi
+tags: [ sqlite, cdc, connector, gsoc, embedded, debezium ]
+---
+
+ifdef::env-github[]
+:imagesdir: ../assets/images/2026-09-17-sqlite-connector-gsoc
+endif::[]
+ifndef::env-github[]
+:imagesdir: /assets/images/2026-09-17-sqlite-connector-gsoc
+endif::[]
+
+SQLite is probably the database you use the most without ever thinking about it. It runs inside your browser, your phone, most desktop apps, aircraft software, and countless edge and IoT devices. It ships in billions of copies, and yet it has no server to run and nothing to configure. The whole database is a single file sitting on your disk.
+
++++<!-- more -->+++
+
+image::intro-sqlite-everywhere.png[Two astronauts looking at Earth: Wait it's all SQLite? Always has been.,520,align="center"]
+
+That same simplicity is what makes it a surprisingly hard database to capture changes from. My Google Summer of Code 2026 project with Debezium was to build a connector that captures every insert, update, and delete from a SQLite file and streams it out as a change event, the same way Debezium already does for Postgres or MySQL.
+
+The catch, and the reason this was a fun project rather than a routine one, is that SQLite gives you almost nothing to build a change stream on. Most of my summer was spent figuring out how to make a change stream appear where there was not one. This post is the story of that journey, and of what building it inside a real open-source project taught me.
+
+== Why a SQLite connector is worth building
+
+It is tempting to think of SQLite as a toy database, but real systems run on it every day. A store's checkout terminal records sales offline and needs head office to see live inventory. A delivery app logs jobs with no signal and has to sync them when it reconnects. A notes app saves edits on your laptop that then need to reach your phone.
+
+All of these already run on local SQLite, and today each team hand-builds its own way to move those changes out. The connector gives them one standard path instead: the app keeps writing to its file, the connector notices the changes, and Debezium streams them onward to wherever they need to go.
+
+== The core problem: SQLite does not tell you what changed
+
+Most databases Debezium already supports keep a running log of committed changes that an outside reader can follow. SQLite does not offer one. It does keep an internal log of its own, but that log stores raw snapshots of the parts of the file that changed, not a readable description of which row was inserted, updated, or deleted. Looking at it is a bit like being handed two photographs of a filing cabinet, before and after, and being asked exactly which sheet of paper someone edited.
+
+image::physical-wal-same-picture.png[Pam from The Office holding up two identical pages of binary: Debezium which row changed? They're the same picture.,470,align="center"]
+
+So the very first question of the project was not "how do I read SQLite's change log", but "how do I get a change log worth reading at all".
+
+== The idea: let SQLite record its own changes
+
+If SQLite will not hand us a clean list of changes, the connector can ask the database to keep one itself.
+
+The approach that shipped uses ordinary SQL triggers. For each table it watches, the connector installs a small trigger that fires on every insert, update, and delete, and writes a single row into an internal bookkeeping table describing what happened: the operation, the row before and after, and an ever-increasing number that puts the changes in order. The database quietly records its own history, in plain SQL, with no change to the application and no special build of SQLite.
+
+== Reading the log, and the road I did not take
+
+This is the part of the project where I learned the most, mostly because my first instinct was wrong.
+
+The plan I started with was to read SQLite's internal file directly and decode it by hand. It sounds impressive, and it never touches the database at all. The problem is that it means rebuilding a large part of SQLite's own internals from scratch, and keeping that copy perfectly in step with SQLite as it changes. It is powerful but fragile.
+
+image::wal-parsing-road-not-taken.png[Michael Scott presenting a box while Pam's smile turns to horror: We'll capture changes by reading SQLite's WAL file directly! We just have to rebuild SQLite's B-tree and record parser in Java, and keep it perfectly in sync with every new SQLite release.,380,align="center"]
+
+The approach that actually shipped is almost embarrassingly simple. The table the triggers write to is just a table in the database, so the connector reads it the way you would read any table: it asks for the new rows since last time, in order, and remembers where it stopped. SQLite does all the hard file-format work, and the connector only ever looks at real changes. While reading how link:https://turso.tech/[Turso] built its own change-capture engine, I found it takes the exact same route rather than decoding the file by hand, which was a reassuring sign that the simple answer was the right one.
+
+The lesson stuck with me. The clever, low-level design was the wrong one, and the plain, boring approach was simpler to maintain, easier, and faster in practice. Knowing which problems _not_ to solve turned out to be as valuable as solving them.
+
+== One more surprise
+
+SQLite had one more quirk waiting. Unlike most databases, it does not force a column to hold one type: a column meant for numbers can happily hold a piece of text in one row and something else in the next. Fun fact: you can easily define a column in SQLite of the type Apple, Siddhant, or even ✨Proxima Centauri✨. Debezium expects each column to have a single, predictable shape, so a good part of the work was deciding how to present SQLite's free-spirited data in a consistent way, and what to do when a value simply does not fit. It was a small feature on the surface and a genuinely interesting design puzzle underneath.
+
+image::type-affinity.png[Anakin and Padme meme: A column will hold the type I declared. Right? Right..?,440,align="center"]
+
+== What Google Summer of Code taught me
+
+The technical puzzles were only half of the experience. The other half was learning to build inside a large, mature project, next to the people who maintain it.
+
+The fastest way to get something right was almost always to find how an existing connector already solved the same thing, and to follow it rather than invent my own version. I also learned the value of working in small, steady steps. Instead of landing the connector as one enormous change, the work went in as a series of small pieces, each one complete and tested on its own: the skeleton first, then configuration, then the snapshot, then streaming, then schema changes, then documentation. It made everything easier to review, cheaper to fix, and far less stressful to build.
+
+The best part, though, was the people. Working with the team, and especially my mentors Giovanni and Vincenzo, was genuinely a joy. From our very first meetings right through to the end, they listened to every approach I brought forward and, instead of simply approving or rejecting it, pushed me to think further into it. That is how I ended up going deep into the internals of a database, unpacking B-trees, indexing, file systems, concurrency, transactions, and much more that I had only ever used from the outside.
+
+Near the end, I got the chance to present my work to the community. I was thrilled, and then my social anxiety showed up right on cue. I decided to face it rather than avoid it. I reworked the presentation with my mentors' help until it was a version I was really happy about. The day before the talk I did a full dry run with no prep and no script, walking through the whole thing from memory. That one unrehearsed run did more for my nerves than anything else. I gave the talk and walked away proud of it and glad I had pushed through instead of stepping back. It turned out to be one of the most rewarding parts of the whole summer.
+
+== Try it, and what comes next
+
+The SQLite connector is at an early, incubating stage, and it already does the core job: it copies existing data, streams new inserts, updates, and deletes from a live file, keeps up with schema changes, and needs no servers or Docker to run, since the database is just a file. To see it end to end, I built a small demo where a web page runs SQL against a SQLite file and each resulting change shows up, live, as a stream of events.
+
+There is plenty ahead: a lighter, trigger-free way to record changes, support for related databases like Turso, and even exploring whether the whole thing can run in the browser through WebAssembly. This is also the first of a few posts. I will share more about the smaller, stranger corners of SQLite next.
+
+If you want to try the connector, read the docs, or contribute, the code lives at link:https://github.com/debezium/debezium-connector-sqlite[debezium/debezium-connector-sqlite], and there is now a dedicated link:https://debezium.zulipchat.com/#narrow/channel/633290-community-sqlite[SQLite community channel on Zulip]. Showing the work to the community, and hearing back from it, is in the end what turns a summer project into a real product.

@@ -261,3 +261,9 @@ pxcamus:
   github: pxcamus
   linkedin: pcamus
   avatar: pxcamus.jpg
+
+siddhantcvdi:
+  name: "Siddhant Chaturvedi"
+  bio: "Siddhant is a software engineer and a final-year Integrated B.Tech + M.Tech (IT) student at IIIT Gwalior, India. He was a Google Summer of Code 2026 contributor with Debezium, where he designed and built the SQLite source connector. Alongside distributed systems and databases, he is a digital artist and photographer."
+  github: siddhantcvdi
+  avatar: siddhantcvdi.jpg
